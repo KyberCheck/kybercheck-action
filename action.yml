@@ -1,0 +1,94 @@
+name: 'KyberCheck Scanner'
+description: 'Scan your codebase for quantum-vulnerable cryptography. Prepare for the post-quantum era.'
+author: 'KyberCheck'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'Your KyberCheck API Key (get one at https://kybercheck.com)'
+    required: true
+  scan-id:
+    description: 'Scan ID from KyberCheck dashboard (auto-filled when triggered from dashboard)'
+    required: false
+  api-url:
+    description: 'API URL for results submission'
+    required: false
+    default: 'https://kybercheck.com'
+  path:
+    description: 'Path to scan (default: entire repository)'
+    required: false
+    default: '.'
+  fail-on-critical:
+    description: 'Fail the build if critical vulnerabilities are found'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Download KyberCheck CLI
+      shell: bash
+      run: |
+        echo "⬇️ Downloading KyberCheck CLI..."
+        URL="https://github.com/KyberCheck/kybercheck-cli/releases/latest/download/kybercheck-linux-amd64"
+        
+        # Create a bin directory in the runner's home
+        mkdir -p $HOME/.kybercheck/bin
+        
+        # Download and make executable
+        # -sSL makes curl quiet but shows errors if it fails
+        curl -sSL "$URL" -o $HOME/.kybercheck/bin/kybercheck
+        chmod +x $HOME/.kybercheck/bin/kybercheck
+        
+        # Add the new bin directory to the GitHub Path for subsequent steps
+        echo "$HOME/.kybercheck/bin" >> $GITHUB_PATH
+        
+        echo "✅ KyberCheck CLI installed successfully."
+      
+    - name: Run KyberCheck Scan
+      shell: bash
+      env:
+        KYBERCHECK_API_KEY: ${{ inputs.api-key }}
+      run: |
+        echo "========================================"
+        echo "🔍 KyberCheck Quantum Vulnerability Scan"
+        echo "========================================"
+        echo ""
+        echo "📋 Configuration:"
+        echo "  Path: ${{ inputs.path }}"
+        echo "  API URL: ${{ inputs.api-url }}"
+        echo "  Scan ID: ${{ inputs.scan-id }}"
+        echo "  API Key: ${KYBERCHECK_API_KEY:0:10}..."
+        echo ""
+        
+        # Construct the command
+        CMD="kybercheck scan ${{ inputs.path }}"
+        
+        if [ -n "${{ inputs.scan-id }}" ]; then
+          CMD="$CMD --scan-id ${{ inputs.scan-id }}"
+        fi
+        
+        if [ -n "${{ inputs.api-url }}" ]; then
+          CMD="$CMD --api-url ${{ inputs.api-url }}"
+        fi
+        
+        if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
+          CMD="$CMD --fail-on-vuln"
+        fi
+        
+        echo "🚀 Executing: $CMD"
+        echo "========================================"
+        echo ""
+        
+        # Run the command
+        # Use the variable directly to ensure arguments are parsed
+        $CMD
+        
+        echo ""
+        echo "========================================"
+        echo "✅ Scan complete!"
+        echo "========================================"
+  
