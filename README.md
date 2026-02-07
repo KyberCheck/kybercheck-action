@@ -35,6 +35,9 @@ jobs:
 | :--- | :--- | :--- | :--- |
 | `api-key` | Your KyberCheck API Key. Get one at [kybercheck.com](https://kybercheck.com). | **Yes** | N/A |
 | `path` | The directory to scan. | No | `.` (Root) |
+| `exclude` | Patterns to exclude (glob). E.g., `**/test/**,**/*.spec.js`. | No | None |
+| `languages` | Specific languages to scan. E.g., `python,rust`. | No | All |
+| `fail-on-critical` | Fail the workflow if critical vulnerabilities are found. | No | `false` |
 
 ## 🔑 Setup
 1. **Get an API Key:** Sign up at [kybercheck.com](https://kybercheck.com) to receive your API key.

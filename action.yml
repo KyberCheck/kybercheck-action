@@ -21,6 +21,14 @@ inputs:
     description: 'Path to scan (default: entire repository)'
     required: false
     default: '.'
+  exclude:
+    description: 'Patterns to exclude from scanning (glob format, comma-separated). Example: "**/test/**,**/*.test.js"'
+    required: false
+    default: ''
+  languages:
+    description: 'Only scan specific languages (comma-separated). Example: "python,javascript,rust"'
+    required: false
+    default: ''
   fail-on-critical:
     description: 'Fail the build if critical vulnerabilities are found'
     required: false
@@ -61,6 +69,8 @@ runs:
         echo "  Path: ${{ inputs.path }}"
         echo "  API URL: ${{ inputs.api-url }}"
         echo "  Scan ID: ${{ inputs.scan-id }}"
+        echo "  Exclude: ${{ inputs.exclude }}"
+        echo "  Languages: ${{ inputs.languages }}"
         echo "  API Key: ${KYBERCHECK_API_KEY:0:10}..."
         echo ""
         
@@ -73,6 +83,23 @@ runs:
         
         if [ -n "${{ inputs.api-url }}" ]; then
           CMD="$CMD --api-url ${{ inputs.api-url }}"
+        fi
+
+        # Add exclude patterns (comma-separated -> individual -e flags)
+        if [ -n "${{ inputs.exclude }}" ]; then
+          IFS=',' read -ra EXCLUDES <<< "${{ inputs.exclude }}"
+          for pattern in "${EXCLUDES[@]}"; do
+            # Trim whitespace
+            pattern=$(echo "$pattern" | xargs)
+            if [ -n "$pattern" ]; then
+              CMD="$CMD -e \"$pattern\""
+            fi
+          done
+        fi
+        
+        # Add language filter if specified
+        if [ -n "${{ inputs.languages }}" ]; then
+          CMD="$CMD -l ${{ inputs.languages }}"
         fi
         
         if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
