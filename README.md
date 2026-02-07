@@ -10,7 +10,7 @@
 Add the following workflow to your repository at `.github/workflows/kybercheck.yml`:
 
 ```yaml
-name: Quantum Security Scan
+name: KyberCheck Scan
 on:
   push:
     branches: [main, master]
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run KyberCheck Scan
-        uses: KyberCheck/kybercheck-action@v1
+        uses: KyberCheck/kybercheck-action@v0.1.0
         with:
           api-key: ${{ secrets.KYBERCHECK_API_KEY }}
 ```
