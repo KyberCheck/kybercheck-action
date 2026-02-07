@@ -18,6 +18,7 @@ on:
 
 jobs:
   scan:
+    name: Quantum Vulnerability Scan
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
