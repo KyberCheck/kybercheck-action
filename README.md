@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run KyberCheck Scan
-        uses: KyberCheck/kybercheck-action@v0.1.0
+        uses: KyberCheck/kybercheck-action@main
         with:
           api-key: ${{ secrets.KYBERCHECK_API_KEY }}
 ```
