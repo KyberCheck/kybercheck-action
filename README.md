@@ -1,7 +1,7 @@
 # KyberCheck GitHub Action 🛡️
 
-[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-KyberCheck--Action-blue?logo=github)](https://github.com/marketplace/actions/kybercheck-scanner)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-KyberCheck--Action-2ea44f?logo=github)](https://github.com/marketplace/actions/kybercheck-scanner)
+[![License](https://img.shields.io/badge/License-Apache_2.0-2ea44f.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **Prepare for the Post-Quantum era.** KyberCheck scans your codebase for quantum-vulnerable cryptography, identifying legacy algorithms (like RSA and ECC) that are at risk from future quantum computer attacks.
 
