@@ -1,5 +1,5 @@
 name: 'KyberCheck Scanner'
-description: 'Scan your codebase for quantum-vulnerable cryptography. Prepare for the post-quantum era.'
+description: 'Scan codebase for quantum-vulnerable cryptography'
 author: 'KyberCheck'
 
 branding:
@@ -8,54 +8,50 @@ branding:
 
 inputs:
   api-key:
-    description: 'Your KyberCheck API Key (get one at https://kybercheck.com)'
+    description: 'KyberCheck API Key'
     required: true
   scan-id:
-    description: 'Scan ID from KyberCheck dashboard (auto-filled when triggered from dashboard)'
+    description: 'Scan ID from KyberCheck dashboard (for website-triggered scans)'
+    required: false
+  dispatch-token:
+    description: 'Dispatch token for authenticated result submission (provided by KyberCheck backend)'
     required: false
   api-url:
     description: 'API URL for results submission'
     required: false
     default: 'https://kybercheck.com'
   path:
-    description: 'Path to scan (default: entire repository)'
+    description: 'Path to scan'
     required: false
     default: '.'
   exclude:
-    description: 'Patterns to exclude from scanning (glob format, comma-separated). Example: "**/test/**,**/*.test.js"'
+    description: 'Comma-separated glob patterns to exclude from scanning'
     required: false
-    default: ''
   languages:
-    description: 'Only scan specific languages (comma-separated). Example: "python,javascript,rust"'
+    description: 'Comma-separated list of languages to scan'
     required: false
-    default: ''
   fail-on-critical:
-    description: 'Fail the build if critical vulnerabilities are found'
+    description: 'Fail build on critical vulnerabilities'
     required: false
     default: 'false'
 
 runs:
   using: 'composite'
   steps:
-    - name: Download KyberCheck CLI
+    - name: Install KyberCheck CLI
       shell: bash
       run: |
         echo "⬇️ Downloading KyberCheck CLI..."
-        URL="https://github.com/KyberCheck/kybercheck-cli/releases/latest/download/kybercheck-linux-amd64"
-        
-        # Create a bin directory in the runner's home
-        mkdir -p $HOME/.kybercheck/bin
-        
-        # Download and make executable
-        # -sSL makes curl quiet but shows errors if it fails
-        curl -sSL "$URL" -o $HOME/.kybercheck/bin/kybercheck
-        chmod +x $HOME/.kybercheck/bin/kybercheck
-        
-        # Add the new bin directory to the GitHub Path for subsequent steps
-        echo "$HOME/.kybercheck/bin" >> $GITHUB_PATH
-        
+        DOWNLOAD_URL="https://github.com/KyberCheck/kybercheck-cli/releases/latest/download/kybercheck-linux-amd64"
+        curl -fsSL "$DOWNLOAD_URL" -o /usr/local/bin/kybercheck || {
+          echo "Binary download failed, falling back to cargo install..."
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          cargo install kybercheck --force
+        }
+        chmod +x /usr/local/bin/kybercheck
         echo "✅ KyberCheck CLI installed successfully."
-      
+
     - name: Run KyberCheck Scan
       shell: bash
       env:
@@ -73,49 +69,49 @@ runs:
         echo "  Languages: ${{ inputs.languages }}"
         echo "  API Key: ${KYBERCHECK_API_KEY:0:10}..."
         echo ""
-        
-        # Construct the command
+
         CMD="kybercheck scan ${{ inputs.path }}"
-        
+
+        # Pass scan-id if provided
         if [ -n "${{ inputs.scan-id }}" ]; then
           CMD="$CMD --scan-id ${{ inputs.scan-id }}"
         fi
-        
+
+        # Pass dispatch token if provided (required for submitting results to dashboard)
+        if [ -n "${{ inputs.dispatch-token }}" ]; then
+          CMD="$CMD --dispatch-token ${{ inputs.dispatch-token }}"
+        else
+          # No dispatch token — run local-only scan (don't submit to API)
+          CMD="$CMD --no-submit"
+        fi
+
+        # Pass API URL
         if [ -n "${{ inputs.api-url }}" ]; then
           CMD="$CMD --api-url ${{ inputs.api-url }}"
         fi
 
-        # Add exclude patterns (comma-separated -> individual -e flags)
+        # Pass exclude patterns
         if [ -n "${{ inputs.exclude }}" ]; then
-          IFS=',' read -ra EXCLUDES <<< "${{ inputs.exclude }}"
-          for pattern in "${EXCLUDES[@]}"; do
-            # Trim whitespace
-            pattern=$(echo "$pattern" | xargs)
-            if [ -n "$pattern" ]; then
-              CMD="$CMD -e \"$pattern\""
-            fi
-          done
+          CMD="$CMD --exclude \"${{ inputs.exclude }}\""
         fi
-        
-        # Add language filter if specified
+
+        # Pass language filter
         if [ -n "${{ inputs.languages }}" ]; then
-          CMD="$CMD -l ${{ inputs.languages }}"
+          CMD="$CMD --languages \"${{ inputs.languages }}\""
         fi
-        
+
+        # Fail on vulnerabilities if requested
         if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
           CMD="$CMD --fail-on-vuln"
         fi
-        
+
         echo "🚀 Executing: $CMD"
         echo "========================================"
         echo ""
-        
-        # Run the command
-        # Use the variable directly to ensure arguments are parsed
-        $CMD
-        
+
+        eval $CMD
+
         echo ""
         echo "========================================"
         echo "✅ Scan complete!"
         echo "========================================"
-  
