@@ -33,7 +33,7 @@ inputs:
   fail-on-critical:
     description: 'Fail build on critical vulnerabilities'
     required: false
-    default: 'false'
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -52,6 +52,41 @@ runs:
         chmod +x /usr/local/bin/kybercheck
         echo "✅ KyberCheck CLI installed successfully."
 
+    - name: Prepare scan scope
+      id: scope
+      shell: bash
+      run: |
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          echo "📋 PR detected — scanning only changed files"
+          
+          # Ensure base branch is available for diff
+          git fetch origin "$GITHUB_BASE_REF" --quiet 2>/dev/null || true
+          
+          # Get list of changed files (Added, Copied, Modified, Renamed)
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/$GITHUB_BASE_REF"...HEAD 2>/dev/null || echo "")
+          
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "⚠️ No changed files detected, falling back to full scan"
+            echo "scan_path=${{ inputs.path }}" >> "$GITHUB_OUTPUT"
+          else
+            # Create temp directory with only changed files (preserving directory structure)
+            SCAN_DIR=$(mktemp -d)
+            echo "$CHANGED_FILES" | while IFS= read -r file; do
+              if [ -f "$file" ]; then
+                mkdir -p "$SCAN_DIR/$(dirname "$file")"
+                cp "$file" "$SCAN_DIR/$file"
+              fi
+            done
+            
+            FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
+            echo "  Found $FILE_COUNT changed files"
+            echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
+          fi
+        else
+          echo "📋 Push/schedule event — scanning full repository"
+          echo "scan_path=${{ inputs.path }}" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Run KyberCheck Scan
       shell: bash
       env:
@@ -62,7 +97,7 @@ runs:
         echo "========================================"
         echo ""
         echo "📋 Configuration:"
-        echo "  Path: ${{ inputs.path }}"
+        echo "  Path: ${{ steps.scope.outputs.scan_path }}"
         echo "  API URL: ${{ inputs.api-url }}"
         echo "  Scan ID: ${{ inputs.scan-id }}"
         echo "  Exclude: ${{ inputs.exclude }}"
@@ -70,7 +105,7 @@ runs:
         echo "  API Key: ${KYBERCHECK_API_KEY:0:10}..."
         echo ""
 
-        CMD="kybercheck scan ${{ inputs.path }}"
+        CMD="kybercheck scan ${{ steps.scope.outputs.scan_path }}"
 
         # Pass scan-id if provided
         if [ -n "${{ inputs.scan-id }}" ]; then
