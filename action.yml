@@ -87,8 +87,10 @@ runs:
               echo "    ... and $((FILE_COUNT - 20)) more"
             fi
             
-            # Create temp directory and copy changed files (preserving directory structure)
-            SCAN_DIR=$(mktemp -d)
+            # Create scan directory INSIDE workspace (not /tmp — scanner excludes **/tmp/**)
+            SCAN_DIR="$GITHUB_WORKSPACE/.kybercheck-scan"
+            rm -rf "$SCAN_DIR"
+            mkdir -p "$SCAN_DIR"
             COPIED=0
             SKIPPED=0
             while IFS= read -r file; do
