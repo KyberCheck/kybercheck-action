@@ -15,6 +15,12 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      scan_id:
+        required: false
+      dispatch_token:
+        required: false
 
 jobs:
   scan:
@@ -23,11 +29,15 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run KyberCheck Scan
         uses: KyberCheck/kybercheck-action@main
         with:
           api-key: ${{ secrets.KYBERCHECK_API_KEY }}
+          scan-id: ${{ inputs.scan_id }}
+          dispatch-token: ${{ inputs.dispatch_token }}
 ```
 
 ## ⚙️ Configuration
@@ -38,7 +48,7 @@ jobs:
 | `path` | The directory to scan. | No | `.` (Root) |
 | `exclude` | Patterns to exclude (glob). E.g., `**/test/**,**/*.spec.js`. | No | None |
 | `languages` | Specific languages to scan. E.g., `python,rust`. | No | All |
-| `fail-on-critical` | Fail the workflow if critical vulnerabilities are found. | No | `false` |
+| `fail-on-critical` | Fail the workflow if critical vulnerabilities are found. | No | `true` |
 
 ## 🔑 Setup
 1. **Get an API Key:** Sign up at [kybercheck.com](https://kybercheck.com) to receive your API key.
