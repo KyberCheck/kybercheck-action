@@ -59,6 +59,9 @@ runs:
         if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
           echo "📋 PR detected — scanning only changed files"
           
+          # Ensure we're in the repo root
+          cd "$GITHUB_WORKSPACE"
+          
           # Ensure base branch is available for diff
           git fetch origin "$GITHUB_BASE_REF" --quiet 2>/dev/null || true
           
@@ -69,17 +72,38 @@ runs:
             echo "⚠️ No changed files detected, falling back to full scan"
             echo "scan_path=${{ inputs.path }}" >> "$GITHUB_OUTPUT"
           else
-            # Create temp directory with only changed files (preserving directory structure)
-            SCAN_DIR=$(mktemp -d)
-            echo "$CHANGED_FILES" | while IFS= read -r file; do
-              if [ -f "$file" ]; then
-                mkdir -p "$SCAN_DIR/$(dirname "$file")"
-                cp "$file" "$SCAN_DIR/$file"
-              fi
-            done
-            
             FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
-            echo "  Found $FILE_COUNT changed files"
+            echo "  Found $FILE_COUNT changed file(s):"
+            
+            # List files (cap display at 20)
+            DISPLAY_COUNT=0
+            while IFS= read -r f; do
+              DISPLAY_COUNT=$((DISPLAY_COUNT + 1))
+              if [ "$DISPLAY_COUNT" -le 20 ]; then
+                echo "    • $f"
+              fi
+            done <<< "$CHANGED_FILES"
+            if [ "$FILE_COUNT" -gt 20 ]; then
+              echo "    ... and $((FILE_COUNT - 20)) more"
+            fi
+            
+            # Create temp directory and copy changed files (preserving directory structure)
+            SCAN_DIR=$(mktemp -d)
+            COPIED=0
+            SKIPPED=0
+            while IFS= read -r file; do
+              if [ -f "$file" ]; then
+                dir="$SCAN_DIR/$(dirname "$file")"
+                mkdir -p "$dir"
+                cp "$file" "$SCAN_DIR/$file"
+                COPIED=$((COPIED + 1))
+              else
+                echo "  ⚠ Skipping (not found): $file"
+                SKIPPED=$((SKIPPED + 1))
+              fi
+            done <<< "$CHANGED_FILES"
+            
+            echo "  Copied $COPIED file(s) to scan directory ($SKIPPED skipped)"
             echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
           fi
         else
