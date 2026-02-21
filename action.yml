@@ -161,9 +161,9 @@ runs:
           CMD="$CMD --languages \"${{ inputs.languages }}\""
         fi
 
-        # Fail on vulnerabilities if requested
+        # Fail on critical vulnerabilities if requested
         if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
-          CMD="$CMD --fail-on-vuln"
+          CMD="$CMD --fail-on-vuln --min-severity critical"
         fi
 
         echo "🚀 Executing: $CMD"
