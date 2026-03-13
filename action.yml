@@ -161,12 +161,11 @@ runs:
           CMD="$CMD --languages \"${{ inputs.languages }}\""
         fi
 
-        # Pass PR scan flags when running on a pull request event
-        # The scanner uses these to enable PR mode (three-dot diff) and
-        # auto-detects CI context from GitHub Actions environment variables
-        if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-          CMD="$CMD --scan-type pr_scan --base-branch $GITHUB_BASE_REF"
-        fi
+        # NOTE: PR file scoping is handled by the "Prepare scan scope" step above,
+        # which copies only changed files to .kybercheck-scan/. The scanner receives
+        # that narrowed directory as its scan path — no extra flags needed.
+        # Future: once scanner v0.1.8+ is published, we can add --scan-type / --base-branch
+        # flags here for the scanner's internal merge-base diff as a secondary check.
 
         # Fail on critical vulnerabilities if requested
         if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
