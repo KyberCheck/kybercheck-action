@@ -161,6 +161,13 @@ runs:
           CMD="$CMD --languages \"${{ inputs.languages }}\""
         fi
 
+        # Pass PR scan flags when running on a pull request event
+        # The scanner uses these to enable PR mode (three-dot diff) and
+        # auto-detects CI context from GitHub Actions environment variables
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          CMD="$CMD --scan-type pr_scan --base-branch $GITHUB_BASE_REF"
+        fi
+
         # Fail on critical vulnerabilities if requested
         if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
           CMD="$CMD --fail-on-vuln --min-severity critical"
