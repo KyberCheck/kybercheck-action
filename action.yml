@@ -30,6 +30,15 @@ inputs:
   languages:
     description: 'Comma-separated list of languages to scan'
     required: false
+  before-sha:
+    description: 'Git SHA before the push (for scanning only changed files in push events)'
+    required: false
+  after-sha:
+    description: 'Git SHA after the push (for scanning only changed files in push events)'
+    required: false
+  base-ref:
+    description: 'Base branch for PR diff (for scanning only changed files in PR workflow_dispatch events)'
+    required: false
   fail-on-critical:
     description: 'Fail build on critical vulnerabilities'
     required: false
@@ -56,60 +65,74 @@ runs:
       id: scope
       shell: bash
       run: |
+        cd "$GITHUB_WORKSPACE"
+        CHANGED_FILES=""
+
         if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
           echo "📋 PR detected — scanning only changed files"
-          
-          # Ensure we're in the repo root
-          cd "$GITHUB_WORKSPACE"
-          
-          # Ensure base branch is available for diff
           git fetch origin "$GITHUB_BASE_REF" --quiet 2>/dev/null || true
-          
-          # Get list of changed files (Added, Copied, Modified, Renamed)
           CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/$GITHUB_BASE_REF"...HEAD 2>/dev/null || echo "")
-          
-          if [ -z "$CHANGED_FILES" ]; then
-            echo "⚠️ No changed files detected, falling back to full scan"
-            echo "scan_path=${{ inputs.path }}" >> "$GITHUB_OUTPUT"
+
+        elif [ -n "${{ inputs.before-sha }}" ] && [ -n "${{ inputs.after-sha }}" ]; then
+          echo "📋 Push (dispatched) — scanning only changed files"
+          echo "  Before: ${{ inputs.before-sha }}"
+          echo "  After:  ${{ inputs.after-sha }}"
+          # Handle initial push (all-zeros before SHA)
+          if echo "${{ inputs.before-sha }}" | grep -qE '^0+$'; then
+            echo "  Initial push — falling back to full scan"
           else
-            FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
-            echo "  Found $FILE_COUNT changed file(s):"
-            
-            # List files (cap display at 20)
-            DISPLAY_COUNT=0
-            while IFS= read -r f; do
-              DISPLAY_COUNT=$((DISPLAY_COUNT + 1))
-              if [ "$DISPLAY_COUNT" -le 20 ]; then
-                echo "    • $f"
-              fi
-            done <<< "$CHANGED_FILES"
-            if [ "$FILE_COUNT" -gt 20 ]; then
-              echo "    ... and $((FILE_COUNT - 20)) more"
-            fi
-            
-            # Create scan directory INSIDE workspace (not /tmp — scanner excludes **/tmp/**)
-            SCAN_DIR="$GITHUB_WORKSPACE/.kybercheck-scan"
-            rm -rf "$SCAN_DIR"
-            mkdir -p "$SCAN_DIR"
-            COPIED=0
-            SKIPPED=0
-            while IFS= read -r file; do
-              if [ -f "$file" ]; then
-                dir="$SCAN_DIR/$(dirname "$file")"
-                mkdir -p "$dir"
-                cp "$file" "$SCAN_DIR/$file"
-                COPIED=$((COPIED + 1))
-              else
-                echo "  ⚠ Skipping (not found): $file"
-                SKIPPED=$((SKIPPED + 1))
-              fi
-            done <<< "$CHANGED_FILES"
-            
-            echo "  Copied $COPIED file(s) to scan directory ($SKIPPED skipped)"
-            echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
+            CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "${{ inputs.before-sha }}" "${{ inputs.after-sha }}" 2>/dev/null || echo "")
           fi
+
+        elif [ -n "${{ inputs.base-ref }}" ]; then
+          echo "📋 PR (dispatched) — scanning only changed files vs ${{ inputs.base-ref }}"
+          git fetch origin "${{ inputs.base-ref }}" --quiet 2>/dev/null || true
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/${{ inputs.base-ref }}"...HEAD 2>/dev/null || echo "")
+
+        elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+          echo "📋 Direct push — scanning only changed files"
+          BEFORE_SHA="${GITHUB_EVENT_BEFORE:-}"
+          AFTER_SHA="$GITHUB_SHA"
+          if [ -n "$BEFORE_SHA" ] && ! echo "$BEFORE_SHA" | grep -qE '^0+$'; then
+            CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "$BEFORE_SHA" "$AFTER_SHA" 2>/dev/null || echo "")
+          fi
+        fi
+
+        # If we have changed files, scope the scan to them
+        if [ -n "$CHANGED_FILES" ]; then
+          FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
+          echo "  Found $FILE_COUNT changed file(s):"
+          DISPLAY_COUNT=0
+          while IFS= read -r f; do
+            DISPLAY_COUNT=$((DISPLAY_COUNT + 1))
+            if [ "$DISPLAY_COUNT" -le 20 ]; then
+              echo "    • $f"
+            fi
+          done <<< "$CHANGED_FILES"
+          if [ "$FILE_COUNT" -gt 20 ]; then
+            echo "    ... and $((FILE_COUNT - 20)) more"
+          fi
+
+          SCAN_DIR="$GITHUB_WORKSPACE/.kybercheck-scan"
+          rm -rf "$SCAN_DIR"
+          mkdir -p "$SCAN_DIR"
+          COPIED=0
+          SKIPPED=0
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              dir="$SCAN_DIR/$(dirname "$file")"
+              mkdir -p "$dir"
+              cp "$file" "$SCAN_DIR/$file"
+              COPIED=$((COPIED + 1))
+            else
+              echo "  ⚠ Skipping (not found): $file"
+              SKIPPED=$((SKIPPED + 1))
+            fi
+          done <<< "$CHANGED_FILES"
+          echo "  Copied $COPIED file(s) to scan directory ($SKIPPED skipped)"
+          echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
         else
-          echo "📋 Push/schedule event — scanning full repository"
+          echo "📋 Full repository scan"
           echo "scan_path=${{ inputs.path }}" >> "$GITHUB_OUTPUT"
         fi
 
