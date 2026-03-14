@@ -78,9 +78,10 @@ runs:
         RESPONSE=$(curl -sf -H "X-API-Key: $KYBERCHECK_API_KEY" \
           "${API_URL}/api/v1/repositories/scan-config?repo=${REPO}" 2>/dev/null || echo '{"enabled":true,"scanOnPush":true,"scanOnPr":true}')
 
-        ENABLED=$(echo "$RESPONSE" | grep -o '"enabled":[a-z]*' | cut -d: -f2)
-        SCAN_ON_PUSH=$(echo "$RESPONSE" | grep -o '"scanOnPush":[a-z]*' | cut -d: -f2)
-        SCAN_ON_PR=$(echo "$RESPONSE" | grep -o '"scanOnPr":[a-z]*' | cut -d: -f2)
+        # Parse response (use || to prevent grep exit code 1 from killing step under set -eo pipefail)
+        ENABLED=$(echo "$RESPONSE" | grep -o '"enabled":[a-z]*' | cut -d: -f2) || ENABLED="true"
+        SCAN_ON_PUSH=$(echo "$RESPONSE" | grep -o '"scanOnPush":[a-z]*' | cut -d: -f2) || SCAN_ON_PUSH="true"
+        SCAN_ON_PR=$(echo "$RESPONSE" | grep -o '"scanOnPr":[a-z]*' | cut -d: -f2) || SCAN_ON_PR="true"
 
         if [ "$ENABLED" = "false" ]; then
           echo "⏭️ Scanning is disabled for $REPO — skipping."
