@@ -61,7 +61,49 @@ runs:
         chmod +x /usr/local/bin/kybercheck
         echo "✅ KyberCheck CLI installed successfully."
 
+    - name: Check scan config
+      id: preflight
+      shell: bash
+      env:
+        KYBERCHECK_API_KEY: ${{ inputs.api-key }}
+      run: |
+        # For dispatched scans (scan-id present), the webhook already checked — always run.
+        if [ -n "${{ inputs.scan-id }}" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        REPO="${{ github.repository }}"
+        API_URL="${{ inputs.api-url }}"
+        RESPONSE=$(curl -sf -H "X-API-Key: $KYBERCHECK_API_KEY" \
+          "${API_URL}/api/v1/repositories/scan-config?repo=${REPO}" 2>/dev/null || echo '{"enabled":true,"scanOnPush":true,"scanOnPr":true}')
+
+        ENABLED=$(echo "$RESPONSE" | grep -o '"enabled":[a-z]*' | cut -d: -f2)
+        SCAN_ON_PUSH=$(echo "$RESPONSE" | grep -o '"scanOnPush":[a-z]*' | cut -d: -f2)
+        SCAN_ON_PR=$(echo "$RESPONSE" | grep -o '"scanOnPr":[a-z]*' | cut -d: -f2)
+
+        if [ "$ENABLED" = "false" ]; then
+          echo "⏭️ Scanning is disabled for $REPO — skipping."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$SCAN_ON_PUSH" = "false" ]; then
+          echo "⏭️ Push scanning is disabled for $REPO — skipping."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "$SCAN_ON_PR" = "false" ]; then
+          echo "⏭️ PR scanning is disabled for $REPO — skipping."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+
     - name: Prepare scan scope
+      if: steps.preflight.outputs.skip != 'true'
       id: scope
       shell: bash
       run: |
@@ -137,6 +179,7 @@ runs:
         fi
 
     - name: Run KyberCheck Scan
+      if: steps.preflight.outputs.skip != 'true'
       shell: bash
       env:
         KYBERCHECK_API_KEY: ${{ inputs.api-key }}
