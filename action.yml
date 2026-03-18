@@ -43,6 +43,15 @@ inputs:
     description: 'Fail build on critical vulnerabilities'
     required: false
     default: 'true'
+  discover-apis:
+    description: 'Discover and probe auth endpoints (OIDC, JWKS) found in source code for quantum-vulnerable algorithms'
+    required: false
+  api-scan-target:
+    description: 'API endpoint URL or JWT token to scan directly (for standalone API scans)'
+    required: false
+  api-scan-type:
+    description: 'Type of API scan target: oidc, jwks, or jwt'
+    required: false
 
 runs:
   using: 'composite'
@@ -233,6 +242,19 @@ runs:
         # that narrowed directory as its scan path — no extra flags needed.
         # Future: once scanner v0.1.8+ is published, we can add --scan-type / --base-branch
         # flags here for the scanner's internal merge-base diff as a secondary check.
+
+        # Discover and probe auth endpoints found in source code
+        if [ -n "${{ inputs.discover-apis }}" ] && [ "${{ inputs.discover-apis }}" != "false" ]; then
+          CMD="$CMD --discover-apis"
+        fi
+
+        # Standalone API scan (OIDC/JWKS/JWT)
+        if [ -n "${{ inputs.api-scan-target }}" ]; then
+          CMD="$CMD --api-scan-target \"${{ inputs.api-scan-target }}\""
+          if [ -n "${{ inputs.api-scan-type }}" ]; then
+            CMD="$CMD --api-scan-type ${{ inputs.api-scan-type }}"
+          fi
+        fi
 
         # Fail on critical vulnerabilities if requested
         if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
