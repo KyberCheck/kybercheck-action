@@ -75,15 +75,18 @@ runs:
       shell: bash
       env:
         KYBERCHECK_API_KEY: ${{ inputs.api-key }}
+        INPUT_SCAN_ID: ${{ inputs.scan-id }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        GH_REPO: ${{ github.repository }}
       run: |
         # For dispatched scans (scan-id present), the webhook already checked — always run.
-        if [ -n "${{ inputs.scan-id }}" ]; then
+        if [ -n "$INPUT_SCAN_ID" ]; then
           echo "skip=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        REPO="${{ github.repository }}"
-        API_URL="${{ inputs.api-url }}"
+        REPO="$GH_REPO"
+        API_URL="$INPUT_API_URL"
         RESPONSE=$(curl -sf -H "X-API-Key: $KYBERCHECK_API_KEY" \
           "${API_URL}/api/v1/repositories/scan-config?repo=${REPO}" 2>/dev/null || echo '{"enabled":true,"scanOnPush":true,"scanOnPr":true}')
 
@@ -116,30 +119,53 @@ runs:
       if: steps.preflight.outputs.skip != 'true'
       id: scope
       shell: bash
+      env:
+        INPUT_BEFORE_SHA: ${{ inputs.before-sha }}
+        INPUT_AFTER_SHA: ${{ inputs.after-sha }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_PATH: ${{ inputs.path }}
       run: |
         cd "$GITHUB_WORKSPACE"
         CHANGED_FILES=""
+
+        # Validate git ref inputs to prevent injection (only hex SHAs and safe branch names)
+        validate_sha() {
+          if [ -n "$1" ] && ! echo "$1" | grep -qE '^[0-9a-fA-F]+$'; then
+            echo "::error::Invalid SHA format: refusing to use potentially unsafe value"
+            exit 1
+          fi
+        }
+        validate_ref() {
+          if [ -n "$1" ] && ! echo "$1" | grep -qE '^[a-zA-Z0-9_./-]+$'; then
+            echo "::error::Invalid ref format: refusing to use potentially unsafe value"
+            exit 1
+          fi
+        }
+
+        validate_sha "$INPUT_BEFORE_SHA"
+        validate_sha "$INPUT_AFTER_SHA"
+        validate_ref "$INPUT_BASE_REF"
 
         if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
           echo "📋 PR detected — scanning only changed files"
           git fetch origin "$GITHUB_BASE_REF" --quiet 2>/dev/null || true
           CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/$GITHUB_BASE_REF"...HEAD 2>/dev/null || echo "")
 
-        elif [ -n "${{ inputs.before-sha }}" ] && [ -n "${{ inputs.after-sha }}" ]; then
+        elif [ -n "$INPUT_BEFORE_SHA" ] && [ -n "$INPUT_AFTER_SHA" ]; then
           echo "📋 Push (dispatched) — scanning only changed files"
-          echo "  Before: ${{ inputs.before-sha }}"
-          echo "  After:  ${{ inputs.after-sha }}"
+          echo "  Before: $INPUT_BEFORE_SHA"
+          echo "  After:  $INPUT_AFTER_SHA"
           # Handle initial push (all-zeros before SHA)
-          if echo "${{ inputs.before-sha }}" | grep -qE '^0+$'; then
+          if echo "$INPUT_BEFORE_SHA" | grep -qE '^0+$'; then
             echo "  Initial push — falling back to full scan"
           else
-            CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "${{ inputs.before-sha }}" "${{ inputs.after-sha }}" 2>/dev/null || echo "")
+            CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "$INPUT_BEFORE_SHA" "$INPUT_AFTER_SHA" 2>/dev/null || echo "")
           fi
 
-        elif [ -n "${{ inputs.base-ref }}" ]; then
-          echo "📋 PR (dispatched) — scanning only changed files vs ${{ inputs.base-ref }}"
-          git fetch origin "${{ inputs.base-ref }}" --quiet 2>/dev/null || true
-          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/${{ inputs.base-ref }}"...HEAD 2>/dev/null || echo "")
+        elif [ -n "$INPUT_BASE_REF" ]; then
+          echo "📋 PR (dispatched) — scanning only changed files vs $INPUT_BASE_REF"
+          git fetch origin "$INPUT_BASE_REF" --quiet 2>/dev/null || true
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/$INPUT_BASE_REF"...HEAD 2>/dev/null || echo "")
 
         elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
           echo "📋 Direct push — scanning only changed files"
@@ -185,7 +211,7 @@ runs:
           echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
         else
           echo "📋 Full repository scan"
-          echo "scan_path=${{ inputs.path }}" >> "$GITHUB_OUTPUT"
+          echo "scan_path=$INPUT_PATH" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Run KyberCheck Scan
@@ -193,48 +219,65 @@ runs:
       shell: bash
       env:
         KYBERCHECK_API_KEY: ${{ inputs.api-key }}
+        INPUT_SCAN_PATH: ${{ steps.scope.outputs.scan_path }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_SCAN_ID: ${{ inputs.scan-id }}
+        INPUT_DISPATCH_TOKEN: ${{ inputs.dispatch-token }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_LANGUAGES: ${{ inputs.languages }}
+        INPUT_DISCOVER_APIS: ${{ inputs.discover-apis }}
+        INPUT_API_SCAN_TARGET: ${{ inputs.api-scan-target }}
+        INPUT_API_SCAN_TYPE: ${{ inputs.api-scan-type }}
+        INPUT_FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
       run: |
+        # Mask secrets so they never appear in CI logs
+        echo "::add-mask::$KYBERCHECK_API_KEY"
+        if [ -n "$INPUT_DISPATCH_TOKEN" ]; then
+          echo "::add-mask::$INPUT_DISPATCH_TOKEN"
+        fi
+
         echo "========================================"
         echo "🔍 KyberCheck Quantum Vulnerability Scan"
         echo "========================================"
         echo ""
         echo "📋 Configuration:"
-        echo "  Path: ${{ steps.scope.outputs.scan_path }}"
-        echo "  API URL: ${{ inputs.api-url }}"
-        echo "  Scan ID: ${{ inputs.scan-id }}"
-        echo "  Exclude: ${{ inputs.exclude }}"
-        echo "  Languages: ${{ inputs.languages }}"
-        echo "  API Key: ${KYBERCHECK_API_KEY:0:10}..."
+        echo "  Path: $INPUT_SCAN_PATH"
+        echo "  API URL: $INPUT_API_URL"
+        echo "  Scan ID: $INPUT_SCAN_ID"
+        echo "  Exclude: $INPUT_EXCLUDE"
+        echo "  Languages: $INPUT_LANGUAGES"
+        echo "  API Key: [MASKED]"
         echo ""
 
-        CMD="kybercheck scan ${{ steps.scope.outputs.scan_path }}"
+        # Build command arguments as an array (safe from injection)
+        CMD_ARGS=("kybercheck" "scan" "$INPUT_SCAN_PATH")
 
         # Pass scan-id if provided
-        if [ -n "${{ inputs.scan-id }}" ]; then
-          CMD="$CMD --scan-id ${{ inputs.scan-id }}"
+        if [ -n "$INPUT_SCAN_ID" ]; then
+          CMD_ARGS+=("--scan-id" "$INPUT_SCAN_ID")
         fi
 
         # Pass dispatch token if provided (required for submitting results to dashboard)
-        if [ -n "${{ inputs.dispatch-token }}" ]; then
-          CMD="$CMD --dispatch-token ${{ inputs.dispatch-token }}"
+        if [ -n "$INPUT_DISPATCH_TOKEN" ]; then
+          CMD_ARGS+=("--dispatch-token" "$INPUT_DISPATCH_TOKEN")
         else
           # No dispatch token — run local-only scan (don't submit to API)
-          CMD="$CMD --no-submit"
+          CMD_ARGS+=("--no-submit")
         fi
 
         # Pass API URL
-        if [ -n "${{ inputs.api-url }}" ]; then
-          CMD="$CMD --api-url ${{ inputs.api-url }}"
+        if [ -n "$INPUT_API_URL" ]; then
+          CMD_ARGS+=("--api-url" "$INPUT_API_URL")
         fi
 
         # Pass exclude patterns
-        if [ -n "${{ inputs.exclude }}" ]; then
-          CMD="$CMD --exclude \"${{ inputs.exclude }}\""
+        if [ -n "$INPUT_EXCLUDE" ]; then
+          CMD_ARGS+=("--exclude" "$INPUT_EXCLUDE")
         fi
 
         # Pass language filter
-        if [ -n "${{ inputs.languages }}" ]; then
-          CMD="$CMD --languages \"${{ inputs.languages }}\""
+        if [ -n "$INPUT_LANGUAGES" ]; then
+          CMD_ARGS+=("--languages" "$INPUT_LANGUAGES")
         fi
 
         # NOTE: PR file scoping is handled by the "Prepare scan scope" step above,
@@ -244,28 +287,28 @@ runs:
         # flags here for the scanner's internal merge-base diff as a secondary check.
 
         # Discover and probe auth endpoints found in source code
-        if [ -n "${{ inputs.discover-apis }}" ] && [ "${{ inputs.discover-apis }}" != "false" ]; then
-          CMD="$CMD --discover-apis"
+        if [ -n "$INPUT_DISCOVER_APIS" ] && [ "$INPUT_DISCOVER_APIS" != "false" ]; then
+          CMD_ARGS+=("--discover-apis")
         fi
 
         # Standalone API scan (OIDC/JWKS/JWT)
-        if [ -n "${{ inputs.api-scan-target }}" ]; then
-          CMD="$CMD --api-scan-target \"${{ inputs.api-scan-target }}\""
-          if [ -n "${{ inputs.api-scan-type }}" ]; then
-            CMD="$CMD --api-scan-type ${{ inputs.api-scan-type }}"
+        if [ -n "$INPUT_API_SCAN_TARGET" ]; then
+          CMD_ARGS+=("--api-scan-target" "$INPUT_API_SCAN_TARGET")
+          if [ -n "$INPUT_API_SCAN_TYPE" ]; then
+            CMD_ARGS+=("--api-scan-type" "$INPUT_API_SCAN_TYPE")
           fi
         fi
 
         # Fail on critical vulnerabilities if requested
-        if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
-          CMD="$CMD --fail-on-vuln --min-severity critical"
+        if [ "$INPUT_FAIL_ON_CRITICAL" = "true" ]; then
+          CMD_ARGS+=("--fail-on-vuln" "--min-severity" "critical")
         fi
 
-        echo "🚀 Executing: $CMD"
+        echo "🚀 Executing: kybercheck scan [args redacted for security]"
         echo "========================================"
         echo ""
 
-        eval $CMD
+        "${CMD_ARGS[@]}"
 
         echo ""
         echo "========================================"
