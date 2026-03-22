@@ -127,6 +127,7 @@ runs:
       run: |
         cd "$GITHUB_WORKSPACE"
         CHANGED_FILES=""
+        SCAN_TYPE="full_audit"
 
         # Validate git ref inputs to prevent injection (only hex SHAs and safe branch names)
         validate_sha() {
@@ -148,6 +149,7 @@ runs:
 
         if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
           echo "📋 PR detected — scanning only changed files"
+          SCAN_TYPE="pr_scan"
           git fetch origin "$GITHUB_BASE_REF" --quiet 2>/dev/null || true
           CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/$GITHUB_BASE_REF"...HEAD 2>/dev/null || echo "")
 
@@ -159,11 +161,13 @@ runs:
           if echo "$INPUT_BEFORE_SHA" | grep -qE '^0+$'; then
             echo "  Initial push — falling back to full scan"
           else
+            SCAN_TYPE="diff_scan"
             CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "$INPUT_BEFORE_SHA" "$INPUT_AFTER_SHA" 2>/dev/null || echo "")
           fi
 
         elif [ -n "$INPUT_BASE_REF" ]; then
           echo "📋 PR (dispatched) — scanning only changed files vs $INPUT_BASE_REF"
+          SCAN_TYPE="pr_scan"
           git fetch origin "$INPUT_BASE_REF" --quiet 2>/dev/null || true
           CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "origin/$INPUT_BASE_REF"...HEAD 2>/dev/null || echo "")
 
@@ -172,6 +176,7 @@ runs:
           BEFORE_SHA="${GITHUB_EVENT_BEFORE:-}"
           AFTER_SHA="$GITHUB_SHA"
           if [ -n "$BEFORE_SHA" ] && ! echo "$BEFORE_SHA" | grep -qE '^0+$'; then
+            SCAN_TYPE="diff_scan"
             CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "$BEFORE_SHA" "$AFTER_SHA" 2>/dev/null || echo "")
           fi
         fi
@@ -211,8 +216,11 @@ runs:
           echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
         else
           echo "📋 Full repository scan"
+          SCAN_TYPE="full_audit"
           echo "scan_path=$INPUT_PATH" >> "$GITHUB_OUTPUT"
         fi
+
+        echo "scan_type=$SCAN_TYPE" >> "$GITHUB_OUTPUT"
 
     - name: Run KyberCheck Scan
       if: steps.preflight.outputs.skip != 'true'
@@ -220,6 +228,7 @@ runs:
       env:
         KYBERCHECK_API_KEY: ${{ inputs.api-key }}
         INPUT_SCAN_PATH: ${{ steps.scope.outputs.scan_path }}
+        INPUT_SCAN_TYPE: ${{ steps.scope.outputs.scan_type }}
         INPUT_API_URL: ${{ inputs.api-url }}
         INPUT_SCAN_ID: ${{ inputs.scan-id }}
         INPUT_DISPATCH_TOKEN: ${{ inputs.dispatch-token }}
@@ -280,11 +289,10 @@ runs:
           CMD_ARGS+=("--languages" "$INPUT_LANGUAGES")
         fi
 
-        # NOTE: PR file scoping is handled by the "Prepare scan scope" step above,
-        # which copies only changed files to .kybercheck-scan/. The scanner receives
-        # that narrowed directory as its scan path — no extra flags needed.
-        # Future: once scanner v0.1.8+ is published, we can add --scan-type / --base-branch
-        # flags here for the scanner's internal merge-base diff as a secondary check.
+        # Pass scan type so the scanner and API know whether this is a diff scan
+        if [ -n "$INPUT_SCAN_TYPE" ] && [ "$INPUT_SCAN_TYPE" != "full_audit" ]; then
+          CMD_ARGS+=("--scan-type" "$INPUT_SCAN_TYPE")
+        fi
 
         # Discover and probe auth endpoints found in source code
         if [ -n "$INPUT_DISCOVER_APIS" ] && [ "$INPUT_DISCOVER_APIS" != "false" ]; then
