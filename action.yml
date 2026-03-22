@@ -231,76 +231,62 @@ runs:
           echo "  Copied $COPIED file(s) to scan directory ($SKIPPED skipped)"
           echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
 
-          # Generate changed-lines map for line-level filtering
-          # This creates a file mapping each changed file to its added/modified line numbers
+          # Generate changed-lines map for line-level filtering (non-fatal — wrapped in subshell)
           DIFF_LINES_FILE="$GITHUB_WORKSPACE/.kybercheck-diff-lines.json"
-          echo "{" > "$DIFF_LINES_FILE"
-          FIRST_ENTRY=true
+          DIFF_LINES_OK=false
+          (
+            set +e  # Disable errexit in subshell so parsing failures don't kill the action
 
-          # Determine the diff command based on how we got CHANGED_FILES
-          DIFF_CMD=""
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            DIFF_CMD="git diff -U0 origin/$GITHUB_BASE_REF...HEAD"
-          elif [ -n "$INPUT_BEFORE_SHA" ] && [ -n "$INPUT_AFTER_SHA" ] && ! echo "$INPUT_BEFORE_SHA" | grep -qE '^0+$'; then
-            DIFF_CMD="git diff -U0 $INPUT_BEFORE_SHA $INPUT_AFTER_SHA"
-          elif [ -n "$INPUT_BASE_REF" ]; then
-            DIFF_CMD="git diff -U0 origin/$INPUT_BASE_REF...HEAD"
-          elif [ -n "${BEFORE_SHA:-}" ] && ! echo "${BEFORE_SHA:-}" | grep -qE '^0+$'; then
-            DIFF_CMD="git diff -U0 $BEFORE_SHA ${AFTER_SHA:-$GITHUB_SHA}"
-          fi
-
-          if [ -n "$DIFF_CMD" ]; then
-            # Parse unified diff to extract added line numbers per file
-            CURRENT_FILE=""
-            while IFS= read -r line; do
-              case "$line" in
-                "diff --git "*)
-                  # Close previous file's array
-                  if [ -n "$CURRENT_FILE" ]; then
-                    echo "]" >> "$DIFF_LINES_FILE"
-                  fi
-                  ;;
-                "+++ b/"*)
-                  CURRENT_FILE="${line#'+++ b/'}"
-                  if [ "$FIRST_ENTRY" = true ]; then
-                    FIRST_ENTRY=false
-                  else
-                    echo "," >> "$DIFF_LINES_FILE"
-                  fi
-                  printf '  "%s": [' "$CURRENT_FILE" >> "$DIFF_LINES_FILE"
-                  FIRST_LINE=true
-                  ;;
-                "@@"*)
-                  # Parse @@ -old,count +new,count @@ to get added line range
-                  NEW_RANGE=$(echo "$line" | sed -n 's/.*+\([0-9]*\),\{0,1\}\([0-9]*\).*/\1 \2/p')
-                  NEW_START=$(echo "$NEW_RANGE" | cut -d' ' -f1)
-                  NEW_COUNT=$(echo "$NEW_RANGE" | cut -d' ' -f2)
-                  if [ -z "$NEW_COUNT" ] || [ "$NEW_COUNT" = "0" ]; then
-                    NEW_COUNT=1
-                  fi
-                  if [ -n "$NEW_START" ] && [ "$NEW_START" != "0" ]; then
-                    NEW_END=$((NEW_START + NEW_COUNT - 1))
-                    for ln in $(seq "$NEW_START" "$NEW_END"); do
-                      if [ "$FIRST_LINE" = true ]; then
-                        FIRST_LINE=false
-                      else
-                        printf ',' >> "$DIFF_LINES_FILE"
-                      fi
-                      printf '%d' "$ln" >> "$DIFF_LINES_FILE"
-                    done
-                  fi
-                  ;;
-              esac
-            done <<< "$($DIFF_CMD 2>/dev/null || echo '')"
-            # Close last file's array
-            if [ -n "$CURRENT_FILE" ]; then
-              echo "]" >> "$DIFF_LINES_FILE"
+            # Get raw diff based on context
+            DIFF_OUTPUT=""
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              DIFF_OUTPUT=$(git diff -U0 "origin/$GITHUB_BASE_REF"...HEAD 2>/dev/null)
+            elif [ -n "$INPUT_BEFORE_SHA" ] && [ -n "$INPUT_AFTER_SHA" ] && ! echo "$INPUT_BEFORE_SHA" | grep -qE '^0+$'; then
+              DIFF_OUTPUT=$(git diff -U0 "$INPUT_BEFORE_SHA" "$INPUT_AFTER_SHA" 2>/dev/null)
+            elif [ -n "$INPUT_BASE_REF" ]; then
+              DIFF_OUTPUT=$(git diff -U0 "origin/$INPUT_BASE_REF"...HEAD 2>/dev/null)
+            elif [ -n "${BEFORE_SHA:-}" ] && ! echo "${BEFORE_SHA:-}" | grep -qE '^0+$'; then
+              DIFF_OUTPUT=$(git diff -U0 "$BEFORE_SHA" "${AFTER_SHA:-$GITHUB_SHA}" 2>/dev/null)
             fi
-          fi
 
-          echo "}" >> "$DIFF_LINES_FILE"
-          echo "diff_lines_file=$DIFF_LINES_FILE" >> "$GITHUB_OUTPUT"
-          echo "  Generated changed-lines map for line-level filtering"
+            if [ -z "$DIFF_OUTPUT" ]; then
+              echo "{}" > "$DIFF_LINES_FILE"
+              exit 1
+            fi
+
+            # Use awk to parse diff hunks into JSON — much more robust than shell loops
+            echo "$DIFF_OUTPUT" | awk '
+              BEGIN { printf "{\n"; first_file=1 }
+              /^\+\+\+ b\// {
+                if (!first_file) printf "],\n"
+                fname = $0; sub(/^\+\+\+ b\//, "", fname)
+                printf "  \"%s\": [", fname
+                first_file=0; first_line=1
+              }
+              /^@@/ {
+                if (match($0, /\+([0-9]+)(,([0-9]+))?/, arr)) {
+                  start = arr[1]+0; count = (arr[3]+0 > 0 ? arr[3]+0 : 1)
+                  if (start > 0) {
+                    for (i = start; i < start+count; i++) {
+                      if (!first_line) printf ","
+                      printf "%d", i
+                      first_line=0
+                    }
+                  }
+                }
+              }
+              END { if (!first_file) printf "]\n"; printf "}\n" }
+            ' > "$DIFF_LINES_FILE"
+          ) && DIFF_LINES_OK=true || DIFF_LINES_OK=false
+
+          # Verify the file exists and isn't empty/just "{}"
+          if [ "$DIFF_LINES_OK" = true ] && [ -s "$DIFF_LINES_FILE" ] && [ "$(wc -c < "$DIFF_LINES_FILE" | tr -d ' ')" -gt 4 ]; then
+            echo "diff_lines_file=$DIFF_LINES_FILE" >> "$GITHUB_OUTPUT"
+            echo "  Generated changed-lines map for line-level filtering"
+          else
+            echo "diff_lines_file=" >> "$GITHUB_OUTPUT"
+            echo "  Skipping line-level filtering (will scan entire changed files)"
+          fi
         else
           echo "📋 Full repository scan"
           SCAN_TYPE="full_audit"
