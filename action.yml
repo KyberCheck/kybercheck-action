@@ -230,10 +230,82 @@ runs:
           done <<< "$CHANGED_FILES"
           echo "  Copied $COPIED file(s) to scan directory ($SKIPPED skipped)"
           echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
+
+          # Generate changed-lines map for line-level filtering
+          # This creates a file mapping each changed file to its added/modified line numbers
+          DIFF_LINES_FILE="$GITHUB_WORKSPACE/.kybercheck-diff-lines.json"
+          echo "{" > "$DIFF_LINES_FILE"
+          FIRST_ENTRY=true
+
+          # Determine the diff command based on how we got CHANGED_FILES
+          DIFF_CMD=""
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            DIFF_CMD="git diff -U0 origin/$GITHUB_BASE_REF...HEAD"
+          elif [ -n "$INPUT_BEFORE_SHA" ] && [ -n "$INPUT_AFTER_SHA" ] && ! echo "$INPUT_BEFORE_SHA" | grep -qE '^0+$'; then
+            DIFF_CMD="git diff -U0 $INPUT_BEFORE_SHA $INPUT_AFTER_SHA"
+          elif [ -n "$INPUT_BASE_REF" ]; then
+            DIFF_CMD="git diff -U0 origin/$INPUT_BASE_REF...HEAD"
+          elif [ -n "${BEFORE_SHA:-}" ] && ! echo "${BEFORE_SHA:-}" | grep -qE '^0+$'; then
+            DIFF_CMD="git diff -U0 $BEFORE_SHA ${AFTER_SHA:-$GITHUB_SHA}"
+          fi
+
+          if [ -n "$DIFF_CMD" ]; then
+            # Parse unified diff to extract added line numbers per file
+            CURRENT_FILE=""
+            while IFS= read -r line; do
+              case "$line" in
+                "diff --git "*)
+                  # Close previous file's array
+                  if [ -n "$CURRENT_FILE" ]; then
+                    echo "]" >> "$DIFF_LINES_FILE"
+                  fi
+                  ;;
+                "+++ b/"*)
+                  CURRENT_FILE="${line#'+++ b/'}"
+                  if [ "$FIRST_ENTRY" = true ]; then
+                    FIRST_ENTRY=false
+                  else
+                    echo "," >> "$DIFF_LINES_FILE"
+                  fi
+                  printf '  "%s": [' "$CURRENT_FILE" >> "$DIFF_LINES_FILE"
+                  FIRST_LINE=true
+                  ;;
+                "@@"*)
+                  # Parse @@ -old,count +new,count @@ to get added line range
+                  NEW_RANGE=$(echo "$line" | sed -n 's/.*+\([0-9]*\),\{0,1\}\([0-9]*\).*/\1 \2/p')
+                  NEW_START=$(echo "$NEW_RANGE" | cut -d' ' -f1)
+                  NEW_COUNT=$(echo "$NEW_RANGE" | cut -d' ' -f2)
+                  if [ -z "$NEW_COUNT" ] || [ "$NEW_COUNT" = "0" ]; then
+                    NEW_COUNT=1
+                  fi
+                  if [ -n "$NEW_START" ] && [ "$NEW_START" != "0" ]; then
+                    NEW_END=$((NEW_START + NEW_COUNT - 1))
+                    for ln in $(seq "$NEW_START" "$NEW_END"); do
+                      if [ "$FIRST_LINE" = true ]; then
+                        FIRST_LINE=false
+                      else
+                        printf ',' >> "$DIFF_LINES_FILE"
+                      fi
+                      printf '%d' "$ln" >> "$DIFF_LINES_FILE"
+                    done
+                  fi
+                  ;;
+              esac
+            done <<< "$($DIFF_CMD 2>/dev/null || echo '')"
+            # Close last file's array
+            if [ -n "$CURRENT_FILE" ]; then
+              echo "]" >> "$DIFF_LINES_FILE"
+            fi
+          fi
+
+          echo "}" >> "$DIFF_LINES_FILE"
+          echo "diff_lines_file=$DIFF_LINES_FILE" >> "$GITHUB_OUTPUT"
+          echo "  Generated changed-lines map for line-level filtering"
         else
           echo "📋 Full repository scan"
           SCAN_TYPE="full_audit"
           echo "scan_path=$INPUT_PATH" >> "$GITHUB_OUTPUT"
+          echo "diff_lines_file=" >> "$GITHUB_OUTPUT"
         fi
 
         echo "scan_type=$SCAN_TYPE" >> "$GITHUB_OUTPUT"
@@ -254,6 +326,7 @@ runs:
         INPUT_API_SCAN_TARGET: ${{ inputs.api-scan-target }}
         INPUT_API_SCAN_TYPE: ${{ inputs.api-scan-type }}
         INPUT_FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
+        KYBERCHECK_DIFF_LINES: ${{ steps.scope.outputs.diff_lines_file }}
       run: |
         set -euo pipefail
         # Mask secrets so they never appear in CI logs
