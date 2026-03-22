@@ -59,13 +59,18 @@ runs:
     - name: Install KyberCheck CLI
       shell: bash
       run: |
+        set -euo pipefail
         echo "⬇️ Downloading KyberCheck CLI..."
         DOWNLOAD_URL="https://github.com/KyberCheck/kybercheck-cli/releases/latest/download/kybercheck-linux-amd64"
-        curl -fsSL "$DOWNLOAD_URL" -o /usr/local/bin/kybercheck || {
+        curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors "$DOWNLOAD_URL" -o /usr/local/bin/kybercheck || {
           echo "Binary download failed, falling back to cargo install..."
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source "$HOME/.cargo/env"
-          cargo install kybercheck --force
+          command -v cargo >/dev/null 2>&1 || { echo "::error::cargo not found after rustup install"; exit 1; }
+          timeout 300 cargo install kybercheck --force || {
+            echo "::error::cargo install timed out or failed"
+            exit 1
+          }
         }
         chmod +x /usr/local/bin/kybercheck
         echo "✅ KyberCheck CLI installed successfully."
@@ -79,6 +84,7 @@ runs:
         INPUT_API_URL: ${{ inputs.api-url }}
         GH_REPO: ${{ github.repository }}
       run: |
+        set -euo pipefail
         # For dispatched scans (scan-id present), the webhook already checked — always run.
         if [ -n "$INPUT_SCAN_ID" ]; then
           echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -87,7 +93,7 @@ runs:
 
         REPO="$GH_REPO"
         API_URL="$INPUT_API_URL"
-        RESPONSE=$(curl -sf -H "X-API-Key: $KYBERCHECK_API_KEY" \
+        RESPONSE=$(curl -sf --retry 2 --retry-delay 3 --connect-timeout 10 --max-time 30 -H "X-API-Key: $KYBERCHECK_API_KEY" \
           "${API_URL}/api/v1/repositories/scan-config?repo=${REPO}" 2>/dev/null || echo '{"enabled":true,"scanOnPush":true,"scanOnPr":true}')
 
         # Parse response (use || to prevent grep exit code 1 from killing step under set -eo pipefail)
@@ -125,19 +131,27 @@ runs:
         INPUT_BASE_REF: ${{ inputs.base-ref }}
         INPUT_PATH: ${{ inputs.path }}
       run: |
+        set -euo pipefail
         cd "$GITHUB_WORKSPACE"
+
+        # Ensure sufficient git history for diff operations
+        if git rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
+          echo "  Deepening shallow clone for diff analysis..."
+          git fetch --deepen=100 2>/dev/null || git fetch --unshallow 2>/dev/null || true
+        fi
+
         CHANGED_FILES=""
         SCAN_TYPE="full_audit"
 
         # Validate git ref inputs to prevent injection (only hex SHAs and safe branch names)
         validate_sha() {
-          if [ -n "$1" ] && ! echo "$1" | grep -qE '^[0-9a-fA-F]+$'; then
+          if [ -n "$1" ] && ! echo "$1" | grep -qE '^[0-9a-fA-F]{7,40}$'; then
             echo "::error::Invalid SHA format: refusing to use potentially unsafe value"
             exit 1
           fi
         }
         validate_ref() {
-          if [ -n "$1" ] && ! echo "$1" | grep -qE '^[a-zA-Z0-9_./-]+$'; then
+          if [ -n "$1" ] && ! echo "$1" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,254}$'; then
             echo "::error::Invalid ref format: refusing to use potentially unsafe value"
             exit 1
           fi
@@ -174,6 +188,7 @@ runs:
         elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
           echo "📋 Direct push — scanning only changed files"
           BEFORE_SHA="${GITHUB_EVENT_BEFORE:-}"
+          validate_sha "$BEFORE_SHA"
           AFTER_SHA="$GITHUB_SHA"
           if [ -n "$BEFORE_SHA" ] && ! echo "$BEFORE_SHA" | grep -qE '^0+$'; then
             SCAN_TYPE="diff_scan"
@@ -203,9 +218,10 @@ runs:
           SKIPPED=0
           while IFS= read -r file; do
             if [ -f "$file" ]; then
+              case "$file" in *..* ) echo "::warning::Skipping path with traversal: $file"; SKIPPED=$((SKIPPED + 1)); continue ;; esac
               dir="$SCAN_DIR/$(dirname "$file")"
               mkdir -p "$dir"
-              cp "$file" "$SCAN_DIR/$file"
+              cp "$file" "$SCAN_DIR/$file" || { echo "::warning::Failed to copy $file"; SKIPPED=$((SKIPPED + 1)); continue; }
               COPIED=$((COPIED + 1))
             else
               echo "  ⚠ Skipping (not found): $file"
@@ -239,6 +255,7 @@ runs:
         INPUT_API_SCAN_TYPE: ${{ inputs.api-scan-type }}
         INPUT_FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
       run: |
+        set -euo pipefail
         # Mask secrets so they never appear in CI logs
         echo "::add-mask::$KYBERCHECK_API_KEY"
         if [ -n "$INPUT_DISPATCH_TOKEN" ]; then
@@ -316,7 +333,15 @@ runs:
         echo "========================================"
         echo ""
 
-        "${CMD_ARGS[@]}"
+        CLI_EXIT=0
+        timeout 600 "${CMD_ARGS[@]}" || CLI_EXIT=$?
+        if [ $CLI_EXIT -eq 124 ]; then
+          echo "::error::KyberCheck CLI timed out after 10 minutes"
+          exit 1
+        elif [ $CLI_EXIT -ne 0 ]; then
+          echo "::error::KyberCheck CLI exited with code $CLI_EXIT"
+          exit $CLI_EXIT
+        fi
 
         echo ""
         echo "========================================"
