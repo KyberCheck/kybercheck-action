@@ -39,6 +39,10 @@ inputs:
   base-ref:
     description: 'Base branch for PR diff (for scanning only changed files in PR workflow_dispatch events)'
     required: false
+  scan-mode:
+    description: 'Scan mode: "diff" scans only changed lines, "files" scans entire changed files'
+    required: false
+    default: 'diff'
   fail-on-critical:
     description: 'Fail build on critical vulnerabilities'
     required: false
@@ -130,6 +134,7 @@ runs:
         INPUT_AFTER_SHA: ${{ inputs.after-sha }}
         INPUT_BASE_REF: ${{ inputs.base-ref }}
         INPUT_PATH: ${{ inputs.path }}
+        INPUT_SCAN_MODE: ${{ inputs.scan-mode }}
       run: |
         set -euo pipefail
         cd "$GITHUB_WORKSPACE"
@@ -232,6 +237,11 @@ runs:
           echo "scan_path=$SCAN_DIR" >> "$GITHUB_OUTPUT"
 
           # Generate changed-lines map for line-level filtering (non-fatal — wrapped in subshell)
+          # Skip when scan_mode is "files" — user wants to scan entire changed files, not just diff lines
+          if [ "${INPUT_SCAN_MODE:-diff}" = "files" ]; then
+            echo "diff_lines_file=" >> "$GITHUB_OUTPUT"
+            echo "  Scan mode: files — scanning entire changed files (no line-level filtering)"
+          else
           DIFF_LINES_FILE="$GITHUB_WORKSPACE/.kybercheck-diff-lines.json"
           DIFF_LINES_OK=false
           (
@@ -287,6 +297,7 @@ runs:
             echo "diff_lines_file=" >> "$GITHUB_OUTPUT"
             echo "  Skipping line-level filtering (will scan entire changed files)"
           fi
+          fi  # end scan_mode != files
         else
           echo "📋 Full repository scan"
           SCAN_TYPE="full_audit"
