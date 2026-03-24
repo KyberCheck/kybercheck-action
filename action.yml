@@ -223,7 +223,7 @@ runs:
           SKIPPED=0
           while IFS= read -r file; do
             if [ -f "$file" ]; then
-              case "$file" in *..* ) echo "::warning::Skipping path with traversal: $file"; SKIPPED=$((SKIPPED + 1)); continue ;; esac
+              case "$file" in *..* | /* ) echo "::warning::Skipping unsafe path: $file"; SKIPPED=$((SKIPPED + 1)); continue ;; esac
               dir="$SCAN_DIR/$(dirname "$file")"
               mkdir -p "$dir"
               cp "$file" "$SCAN_DIR/$file" || { echo "::warning::Failed to copy $file"; SKIPPED=$((SKIPPED + 1)); continue; }
